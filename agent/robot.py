@@ -5,6 +5,9 @@ import time
 from collections import defaultdict
 from typing import Dict, List, Literal, Optional
 
+import requests
+from llama_index.core.base.llms.types import ChatResponse
+import json
 import numpy as np
 from gymnasium import spaces
 from loguru import logger
@@ -73,6 +76,9 @@ class Robot:
         self.previous_actions = defaultdict(list)
         self.actions = {}
         self.player_nb = player_nb
+        self.ttft_list = []
+        self.reponse_time_list = []
+        self.tps_list = []
 
     def act(self) -> int:
         """
@@ -228,9 +234,9 @@ class Robot:
 
         power_prompt = ""
         if super_bar_own >= 30:
-            power_prompt = "You can now use a powerfull move. The names of the powerful moves are: Megafireball, Super attack 2."
+            power_prompt = "You can now use a powerful move. The names of the powerful moves are: Megafireball, Super attack 2."
         if super_bar_own >= 120 or super_bar_own == 0:
-            power_prompt = "You can now only use very powerfull moves. The names of the very powerful moves are: Super attack 3, Super attack 4"
+            power_prompt = "You can now only use very powerful moves. The names of the very powerful moves are: Super attack 3, Super attack 4"
         # Create the last action prompt
         last_action_prompt = ""
         if len(self.previous_actions.keys()) >= 0:
@@ -272,6 +278,49 @@ To increase your score, move toward the opponent and attack the opponent. To pre
 
         return context
 
+    def get_moves_from_llm_new(
+        self,
+    ):
+        """
+        Get a list of moves from the language model.
+        """
+
+        # Filter the moves that are not in the list of moves
+        invalid_moves = []
+        valid_moves = []
+
+        # If we are in the test environment, we don't want to call the LLM
+        if os.getenv("DISABLE_LLM", "False") == "True":
+            # Choose a random int from the list of moves
+            logger.debug("DISABLE_LLM is True, returning a random move")
+            return [random.choice(list(MOVES.values()))]
+
+        while len(valid_moves) == 0:
+            llm_stream = self.call_llm()
+
+            for move in self.parse_llm_stream(llm_stream):
+                cleaned_move_name = move.strip().lower()
+                if cleaned_move_name in META_INSTRUCTIONS_WITH_LOWER.keys():
+                    if self.player_nb == 1:
+                        print(
+                            f"[red] Player {self.player_nb} move: {cleaned_move_name}"
+                        )
+                    elif self.player_nb == 2:
+                        print(
+                            f"[green] Player {self.player_nb} move: {cleaned_move_name}"
+                        )
+                    valid_moves.append(cleaned_move_name)
+                    yield cleaned_move_name
+                else:
+                    logger.debug(f"Invalid completion: {move}")
+                    logger.debug(f"Cleaned move name: {cleaned_move_name}")
+                    invalid_moves.append(move)
+
+            if len(invalid_moves) > 1:
+                logger.warning(f"Many invalid moves: {invalid_moves}")
+
+        logger.debug(f"Next moves: {valid_moves}")
+
     def get_moves_from_llm(
         self,
     ) -> List[str]:
@@ -298,8 +347,8 @@ To increase your score, move toward the opponent and attack the opponent. To pre
             llm_response = ""
 
             for r in llm_stream:
-                print(r.delta, end="")
-                llm_response += r.delta
+                print(r, end="")
+                llm_response += r
 
                 # The response is a bullet point list of moves. Use regex
                 matches = re.findall(r"- ([\w ]+)", llm_response)
@@ -329,12 +378,73 @@ To increase your score, move toward the opponent and attack the opponent. To pre
             logger.debug(f"Next moves: {valid_moves}")
             return valid_moves
 
+    def parse_llm_stream(self, llm_stream, stream: bool = False):
+        llm_response = ""
+        first = True
+        start = time.time()
+        if stream:
+            for r in llm_stream:
+                print(r, end="")
+
+                # Calculate time to first token
+                if first:
+                    end = time.time()
+                    ttft = end - start
+                    self.ttft_list.append(ttft)
+                    first = False
+
+                llm_response += r
+                # Use regex to find complete moves in real-time
+                while '\n' in llm_response:
+                    line, llm_response = llm_response.split('\n', 1)
+                    match = re.match(r"- ([\w ]+)", line)
+                    if match:
+                        move = match.group(1).strip()
+                        yield move
+            # Handle any remaining text in the buffer
+            if llm_response:
+                match = re.match(r"- ([\w ]+)", llm_response)
+                if match:
+                    move = match.group(1).strip()
+                    yield move
+        else:
+            start = time.time()
+            for r in llm_stream:
+                llm_response += r.delta
+
+                # Calculate time to first token
+                if first:
+                    end = time.time()
+                    ttft = end - start
+                    self.ttft_list.append(ttft)
+                    first = False
+
+            # Process the accumulated response
+            matches = re.findall(r"- ([\w ]+)", llm_response)
+            moves = ["".join(match) for match in matches]
+            invalid_moves = []
+            valid_moves = []
+            moves = []
+            while '\n' in llm_response:
+                line, llm_response = llm_response.split('\n', 1)
+                match = re.match(r"- ([\w ]+)", line)
+                if match:
+                    move = match.group(1).strip()
+                    moves.append(move)
+            # Handle any remaining text in the buffer
+            if llm_response:
+                match = re.match(r"- ([\w ]+)", llm_response)
+                if match:
+                    move = match.group(1).strip()
+                    moves.append(move)
+            yield from moves
+
     def call_llm(
         self,
         temperature: float = 0.7,
         max_tokens: int = 50,
         top_p: float = 1.0,
-    ) -> str:
+    ):
         """
         Make an API call to the language model.
 
@@ -344,7 +454,7 @@ To increase your score, move toward the opponent and attack the opponent. To pre
         # Generate the prompts
         move_list = "- " + "\n - ".join([move for move in META_INSTRUCTIONS])
         system_prompt = f"""You are the best and most aggressive Street Fighter III 3rd strike player in the world.
-Your character is {self.character}. Your goal is to beat the other opponent. You respond with a bullet point list of moves.
+Your character is {self.character}. Your goal is to beat the other opponent as quickly as possible. You respond with a bullet point list of moves.
 {self.context_prompt()}
 The moves you can use are:
 {move_list}
@@ -356,19 +466,112 @@ Example if the opponent is close:
 
 Example if the opponent is far:
 - Fireball
-- Move closer"""
+- Move closer
+Use the information provided to respond with the best next set of moves and always follow the format: `- <name of the move>` separated by a new line.\
+"""
 
+        user_prompt = "Your next moves are:"
         start_time = time.time()
 
-        client = get_client(self.model)
-
         messages = [
-            ChatMessage(role="system", content=system_prompt),
-            ChatMessage(role="user", content="Your next moves are:"),
+            # ChatMessage(role="system", content=system_prompt),
+            ChatMessage(role="user", content=user_prompt + "\n" + system_prompt),
         ]
-        resp = client.stream_chat(messages)
+        if self.model.startswith("samba"):
+            print("USING SAMBA")
+            model_name = self.model[6::]
+            stream = self.chat_samba(user_prompt + "\n" + system_prompt, system_prompt, model_name)
 
-        logger.debug(f"LLM call to {self.model}: {system_prompt}")
-        logger.debug(f"LLM call to {self.model}: {time.time() - start_time}s")
+            logger.debug(f"LLM call to {self.model}: {system_prompt}")
+            logger.debug(f"LLM call to {self.model}: {time.time() - start_time}s")
 
-        return resp
+            first = True
+            start = time.time()
+            for chunk in stream:
+                end = time.time()
+                if first:
+                    self.ttft_list.append(end - start)
+                    first = False
+
+                yield chunk
+            end = time.time()
+            self.reponse_time_list.append(end - start)
+        else:
+            client = get_client(self.model)
+            stream = client.stream_chat(messages)
+
+            logger.debug(f"LLM call to {self.model}: {system_prompt}")
+            logger.debug(f"LLM call to {self.model}: {time.time() - start_time}s")
+
+            first = True
+            start = time.time()
+            for chunk in stream:
+                end = time.time()
+                # Calculate time to first token
+                if first:
+                    self.ttft_list.append(end - start)
+                    first = False
+
+                token = chunk
+                yield chunk.delta
+
+            end = time.time()
+            self.reponse_time_list.append(end - start)
+            # Calculate tokens per second in stream
+            comp_tokens = token.raw['x_groq']['usage']['completion_tokens']
+            comp_time = token.raw['x_groq']['usage']['completion_time']
+            self.tps_list.append(comp_tokens/comp_time)
+
+    def chat_samba(
+            self,
+            user_prompt: str,
+            system_prompt: str = "You are a helpful assistant",
+            model: str = "google/gemma-7b-it",
+            api_key: str = os.getenv("SAMBA_API_KEY")
+        ):
+        url = 'https://sambaverse.sambanova.ai/api/predict'
+        headers = {
+            'Content-Type': 'application/json',
+            'key': api_key or '973d1e73-c16f-47d8-8cb7-27f83eb2bf2b',
+            'modelName': model
+        }
+
+        data = {
+            "instance": json.dumps({
+                "conversation_id": "sambaverse-conversation-id",
+                "messages": [
+                    {
+                        "message_id": 0,
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "message_id": 1,
+                        "role": "user",
+                        "content": user_prompt
+                    }
+                ]
+            }),
+            "params": {
+                "do_sample": {"type": "bool", "value": "true"},
+                "max_tokens_to_generate": {"type": "int", "value": "1024"},
+                "process_prompt": {"type": "bool", "value": "true"},
+                "repetition_penalty": {"type": "float", "value": "1.0"},
+                "return_token_count_only": {"type": "bool", "value": "false"},
+                "select_expert": {"type": "str", "value": "gemma-7b-it"},
+                "stop_sequences": {"type": "str", "value": ""},
+                "temperature": {"type": "float", "value": "0.7"},
+                "top_k": {"type": "int", "value": "50"},
+                "top_p": {"type": "float", "value": "0.95"}
+            }
+        }
+
+        response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
+
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode('utf-8')
+                json_response = json.loads(decoded_line)
+                yield json_response['result']['responses'][0]['stream_token']
+        tps = json_response['result']['responses'][0]['total_tokens_per_sec']
+        self.tps_list.append(tps)

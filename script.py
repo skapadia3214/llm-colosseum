@@ -14,16 +14,23 @@ def main():
     # Environment Settings
     game = Game(
         render=True,
+        save_game=True,
+        splash_screen=True,
+        frame_shape=[301, 512, 0],
         player_1=Player1(
-            nickname="Daddy",
-            model="ollama:llama3",
+            nickname="Groq Gemma-7B-it",
+            model="groq:gemma-7b-it",
         ),
         player_2=Player2(
-            nickname="Baby",
-            model="anthropic:claude-3-haiku-20240307",
+            nickname="Sambanova Gemma-7B-it",
+            model="samba:google/gemma-7b-it",
         ),
+        # player_2=Player2(
+            # nickname="OpenAI GPT-4o",
+            # model="openai:gpt-4o",
+        # ),
     )
-    return game.run()
+    game.run()
 
 
 if __name__ == "__main__":

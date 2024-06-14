@@ -323,6 +323,18 @@ class Game:
                         player1_thread.running = False
                     player2_thread.running = False
                     episode.player_1_won = p1_wins == 1
+                    total = 0
+
+                    # P1 analytics
+                    print(f"[red] {self.player_1.model} Average time to first token: {sum(self.player_1.robot.ttft_list) / len(self.player_1.robot.ttft_list)}")
+                    print(f"[red] {self.player_1.model} Average tokens/s: {sum(self.player_1.robot.tps_list) / len(self.player_1.robot.tps_list)}")
+                    print(f"[red] {self.player_1.model} Average LLM response time: {sum(self.player_1.robot.reponse_time_list) / len(self.player_1.robot.reponse_time_list)}")
+
+                    # P2 analytics
+                    print(f"[green] {self.player_2.model} Average time to first token: {sum(self.player_2.robot.ttft_list) / len(self.player_2.robot.ttft_list)}")
+                    print(f"[green] {self.player_2.model} Average tokens/s: {sum(self.player_2.robot.tps_list) / len(self.player_2.robot.tps_list)}")
+                    print(f"[green] {self.player_2.model} Average LLM response time: {sum(self.player_2.robot.reponse_time_list) / len(self.player_2.robot.reponse_time_list)}")
+
                     if episode.player_1_won:
                         print(
                             f"[red] Player1 {self.player_1.robot.model} '{self.player_1.nickname}' won!"

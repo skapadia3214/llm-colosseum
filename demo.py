@@ -16,13 +16,14 @@ def main():
     game = Game(
         render=True,
         save_game=True,
+        splash_screen=True,
         player_1=Player1(
-            nickname="Baby",
-            model="mistral:mistral-small-latest",
+            nickname="Groq Gemma-7B",
+            model="groq:gemma-7b-it",
         ),
         player_2=Player2(
-            nickname="Daddy",
-            model="mistral:mistral-small-latest",
+            nickname="OpenAI GPT-3.5-Turbo",
+            model="openai:gpt-3.5-turbo",
         ),
     )
 
